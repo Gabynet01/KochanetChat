@@ -4,6 +4,10 @@
   "version": "1.0.0",
   "scripts": {
     "start": "expo start",
+    "start:android": "(adb -e reverse tcp:8081 tcp:8081 || adb reverse tcp:8081 tcp:8081 || true); EXPO_FAST_METRO=1 REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1 expo start --localhost --max-workers 2",
+    "android:dev": "(adb -e reverse tcp:8081 tcp:8081 || adb reverse tcp:8081 tcp:8081 || true); EXPO_FAST_METRO=1 REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1 expo run:android",
+    "start:android:tunnel": "expo start --tunnel",
+    "verify:android": "bash scripts/verify-android-dev.sh",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",

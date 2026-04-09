@@ -5,8 +5,11 @@ Kochanet Chat is a premium, real-time collaborative mobile application built wit
 ---
 
 > [!IMPORTANT]
-> **Firebase Blaze Plan & Local Emulation**
-> This project currently does not use a Firebase Blaze plan. Since Firebase Cloud Functions (v2) and certain triggers require a paid tier for deployment, **local emulation of the Firebase Suite is MANDATORY** for full functionality (including AI responders, Push Notifications, and Presence Sync).
+> **Firebase plan: two ways to run the backend**
+>
+> - **Blaze plan:** If your Firebase project is on **Blaze** and you deploy Cloud Functions (v2) and related services to production, you can **skip the local-emulator parts of this README** (emulator install, `npm run emulate`, and notes that say emulators are mandatory). Use production credentials in `.env`, deploy functions (`firebase deploy --only functions` or your CI), and run the app against your live project. You still need the usual mobile config (`google-services.json`, `GoogleService-Info.plist`, env vars)—only the **mandatory emulator** workflow does not apply.
+>
+> - **Spark (free) / no Blaze:** Cloud Functions (v2) and some triggers are not available for production deployment on the free tier alone. **Local emulation of the Firebase suite is mandatory** for full functionality (AI responders, push notifications, presence sync, etc.).
 
 ---
 
@@ -27,11 +30,13 @@ Kochanet Chat is a premium, real-time collaborative mobile application built wit
 ## 🛠 Technology Stack
 
 ### Core
+
 - **React Native + Expo (SDK 54)**: Managed workflow with `expo-dev-client` for native performance and rapid iteration.
 - **TypeScript**: Full type safety across the mobile client and backend functions.
 - **Zustand + MMKV**: Ultra-fast state management combined with a high-performance synchronous storage layer.
 
 ### Backend & AI
+
 - **Firebase Suite**: Auth, Firestore, RTDB, Storage, and Cloud Functions (v2).
 - **OpenAI GPT-4o-mini**: Powers the conversational engine with smart summarization for long-term memory.
 - **Whisper API**: High-fidelity audio transcription for voice communication.
@@ -43,12 +48,14 @@ Kochanet Chat is a premium, real-time collaborative mobile application built wit
 The application follows a modular architecture designed for zero-latency interactions:
 
 ### Real-Time Strategy
+
 1. **Firestore onSnapshot**: Handles message persistence and real-time thread updates.
 2. **Atomic Batch Updates**: Mark-as-read and Mark-as-delivered operations use `writeBatch` to group multiple document updates into a single atomic transaction, significantly reducing Firestore write costs and latency.
 3. **RTDB for High-Frequency State**: Both **User Presence** and **Typing Indicators** are handled via RTDB to provide sub-100ms feedback while bypassing Firestore document write limits.
 4. **Smooth Streaming v2**: AI responses are updated in Firestore on a per-token basis. The client uses `onSnapshot` to render these updates progressively, providing a ChatGPT-like experience.
 
 ### Cloud Functions (v2)
+
 - **`onChatMessageCreated`**: Triggers the AI assistant with context summarization, handles push notifications, increments unread counts, and enforces **AI Rate Limiting** (15s cooldown).
 - **`onUserStatusChanged`**: Automatically syncs RTDB presence state (Online/Offline) to Firestore user profiles for global discovery.
 - **`transcribeAudio`**: On-call function for handling server-side Whisper transcription from Cloud Storage.
@@ -57,15 +64,68 @@ The application follows a modular architecture designed for zero-latency interac
 
 ## ⚙️ Setup & Installation
 
+**Using a Blaze plan?** You may **skip step 3** (Firebase emulators) below and skip emulator-only notes elsewhere in this document, as long as your backend is deployed and your `.env` points at **production** Firebase. The expandable **Detailed Firebase Setup Guide** still applies for creating the app, keys, and native files—unless you already have an equivalent configured project.
+
 ### Prerequisites
+
 - Node.js (v18+)
 - pnpm (recommended)
-- Firebase CLI (`npm install -g firebase-tools`)
+- Firebase CLI (`npm install -g firebase-tools`) — optional if you never run emulators (Blaze + deployed backend only)
 - OpenAI API Key (configured in `functions/.env`)
+
+<details>
+<summary><b>Detailed Firebase Setup Guide (Click to expand)</b></summary>
+
+### 1. Project Creation & Authentication
+
+- Go to the [Firebase Console](https://console.firebase.google.com/) and create a new project.
+- From the sidebar, go to **Security**, select **Authentication** and enable **Email/Password** and **Google** sign-in providers in the Authentication (might need to click "Get Started" first).
+
+### 2. Web App Configuration
+
+- From the sidebar, go to **Settings** then **General**, click the **Web** icon (`</>`) to create a new Web App (should be at the bottom part of the page).
+- Follow the instructions to create a new Web App. Copy the `firebaseConfig` object and paste the values into the respective `EXPO_PUBLIC_FIREBASE_CONFIG_...` fields in your `.env` (use `.envtemplate` as a guide).
+
+### 3. Android Platform Setup
+
+- Create an **Android App** in the from the same **General** page (there should be an "Add app" button).
+- Follow the instructions to create a new Android App. Download `google-services.json` and move it to the **root** of the project.
+- **Important**: Open `google-services.json`, find the `client_id` with `client_type: 3`. Copy this value. If you don't find it, delete the app and make sure Authentication is enabled from Step 1 above.
+- Paste this `client_id` into both `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` and `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` in your `.env`.
+- In the Firebase Console (General Settings > Android App), add a **SHA-1 certificate fingerprint**. To get this:
+  - Run `eas credentials` in your terminal.
+  - Choose `Android` -> `development build`.
+  - Copy the **SHA1** from the output and paste it into Firebase.
+
+### 4. iOS Platform Setup
+
+- Create an **iOS App** in the Firebase settings.
+- Download `GoogleService-Info.plist` and move it to the **root** of the project.
+- Open `GoogleService-Info.plist`, find the `CLIENT_ID` key. Copy the string value.
+- Paste this value into `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` in your `.env`.
+
+### 5. Push Notifications & Service Account
+
+- In the Firebase Console, go to **Project Settings** > **Service accounts**.
+- Click **Generate new private key**, download the file, and rename it to `fcm.json`.
+- Copy `fcm.json` to the **root** of the project.
+- Run `eas credentials` in your terminal.
+- Choose **Google Services** > **Manage for [your bundle ID]** > **Push notifications**.
+- Choose **Setup new key**.
+  - If EAS discovers `fcm.json`, press `y` to confirm.
+  - Otherwise, manually type `fcm.json` when asked for the file path.
+- **Critical**: After the upload is complete, **delete fcm.json** from your local machine immediately for security.
+
+### 6. Final Sync
+
+- Ensure all three files (`google-services.json`, `GoogleService-Info.plist`, and `fcm.json` - before deletion) are present in the project root if you are building locally.
+- Start the development server: `pnpm start`.
+</details>
 
 ### Steps
 
 1. **Clone & Install**:
+
    ```bash
    git clone <repo-url>
    cd kochanet-chat
@@ -76,32 +136,39 @@ The application follows a modular architecture designed for zero-latency interac
 2. **Environment Configuration**:
    Create a `.env` in the root and `functions/.env` with your Firebase and OpenAI credentials.
 
-3. **Start Firebase Emulators (REQUIRED)**:
-   In a separate terminal, navigate to the `functions` directory and run:
+3. **Start Firebase Emulators (skip on Blaze if you use production)**:
+   **Not on Blaze, or not using deployed functions?** This step is **required**. In a separate terminal, from the `functions` directory:
+
    ```bash
    # From /functions
    npm run emulate
    ```
-   *This starts Auth, Firestore, RTDB, Storage, and Functions locally.*
+
+   _This starts Auth, Firestore, RTDB, Storage, and Functions locally._
+
+   **On Blaze** with functions and rules already deployed: skip this step and ensure the app is configured for your **live** Firebase project (see `services/firebase.ts` / env: the default dev client may still target emulators—adjust or use a release build if you need production-only).
 
 4. **Start Expo**:
    ```bash
    pnpm start
    ```
-   *If testing on a physical device, ensure the `EXPO_PUBLIC_FIREBASE_CONFIG` host matches your local machine's IP (e.g., `192.168.1.X`).*
+   _If testing on a physical device, ensure the `EXPO_PUBLIC_FIREBASE_CONFIG` host matches your local machine's IP (e.g., `192.168.1.X`)._
 
 ---
 
 ## 📱 Navigation & State Management
 
 ### Navigation Structure (`expo-router`)
+
 - **(auth)**: Frictionless entry point with Email/Password and Google One Tap.
 - **(main) / (tabs)**: Primary tab-based navigation for Inbox and Profile.
 - **(main) / chat/[id]**: Deep-linked, high-performance chat room with contextual headers.
 - **Modals**: Used for ephemeral interactions like `NewChat` and `EditProfile` to maintain user context.
 
 ### State management (`Zustand` + `MMKV`)
+
 We utilize a multi-store approach for clean separation of concerns:
+
 - **`useAuthStore`**: Manages user session, profile synchronization, and persistent login state.
 - **`useChatStore`**: Reactive store for global unread counts and message synchronization logic.
 - **`usePreferencesStore`**: Handles user-facing settings (Dark/Light mode, Notifications) with synchronous persistence via MMKV.
@@ -112,9 +179,11 @@ We utilize a multi-store approach for clean separation of concerns:
 ## 🧠 AI Integration: @ai Assistant
 
 ### Invocation Mechanism
+
 The AI is invoked server-side via a Cloud Function trigger (`onChatMessageCreated`). It scans all incoming messages for the `@ai` mention. This ensures the mobile client remains lightweight and the AI logic is centralized and secure.
 
 ### Context & Memory Management
+
 - **Short-term Memory**: The last 20 messages in the thread are provided to OpenAI for immediate context awareness.
 - **Context Summarization**: When history exceeds 20 messages, the system automatically summarizes the oldest 10 messages into a "Context Memory" block, which is then injected into the system prompt. This provides a balance between cost-efficiency and conversational continuity.
 - **Streaming Experience**: Responses are streamed from OpenAI and written to Firestore in small word-batches. The React Native client uses `onSnapshot` to render these updates progressively, providing a premium "live" feel.
@@ -135,12 +204,14 @@ The AI is invoked server-side via a Cloud Function trigger (`onChatMessageCreate
 For the best experience, we recommend using two devices (or one device and the web/emulated environment) to test real-time features.
 
 ### Test Credentials
-| Account | Email | Password |
-|---|---|---|
-| **User A** | `test@example.com` | `Password123!` |
+
+| Account    | Email               | Password       |
+| ---------- | ------------------- | -------------- |
+| **User A** | `test@example.com`  | `Password123!` |
 | **User B** | `test2@example.com` | `Password123!` |
 
 ### Recommended Demo Flow
+
 1. **Login**: Sign in as User A and User B on separate instances.
 2. **Real-Time Synergy**: Send messages between accounts and observe sub-second delivery and unread count updates.
 3. **Invoke AI**: Type `@ai, tell me a joke about coding` and watch the progressive streaming response.

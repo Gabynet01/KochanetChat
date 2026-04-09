@@ -48,14 +48,18 @@ export const LoginScreen = () => {
       }
     } catch (error) {
       console.error("Native Google Auth Error:", error);
-      // GoogleSignin.signIn() throws if user cancels, we don't necessarily want a Toast there
       if (typeof error === "object" && error !== null && "code" in error) {
-        if (
-          error.code !== "ASYNC_OP_IN_PROGRESS" &&
-          error.code !== "SIGN_IN_CANCELLED"
-        ) {
-          setError("Google Sign-In failed: " + error.code);
+        const code = String((error as { code?: string }).code);
+        if (code === "ASYNC_OP_IN_PROGRESS" || code === "SIGN_IN_CANCELLED") {
+          return;
         }
+        if (code === "DEVELOPER_ERROR" || code === "10") {
+          setError(
+            "Google Sign-In is not configured for this debug build. In Firebase Console, add your Android debug SHA-1 fingerprint, then download an updated google-services.json. Run: cd android && ./gradlew signingReport",
+          );
+          return;
+        }
+        setError("Google Sign-In failed: " + code);
       }
     } finally {
       setIsLoading(false);

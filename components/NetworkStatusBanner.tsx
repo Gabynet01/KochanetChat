@@ -5,7 +5,6 @@ import React from "react";
 import { StyleSheet, View } from "react-native";
 import Animated, {
   useAnimatedStyle,
-  useDerivedValue,
   useSharedValue,
   withSpring,
   withTiming,
@@ -23,9 +22,6 @@ export const NetworkStatusBanner = () => {
   const insets = useSafeAreaInsets();
 
   const translateY = useSharedValue(-100);
-  const { value: isInitialTranslateY } = useDerivedValue(() => {
-    return translateY.value === -100;
-  });
 
   const animatedStyle = useAnimatedStyle(() => {
     if (!isOnline) {
@@ -42,8 +38,6 @@ export const NetworkStatusBanner = () => {
       transform: [{ translateY: translateY.value }],
     };
   }, [isOnline, insets.top, translateY]);
-
-  if (isOnline && isInitialTranslateY) return null;
 
   return (
     <Animated.View
