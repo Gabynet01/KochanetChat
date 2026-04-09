@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "342536922626",
+    "project_id": "kochanet-interview-2bce3",
+    "storage_bucket": "kochanet-interview-2bce3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:342536922626:android:842cf86dec85aebf86291b",
+        "android_client_info": {
+          "package_name": "com.gabynet75.kochantinterviewchat"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "342536922626-7tu8v4h3289cpp3feqpl68rtl08hiie1.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCyeuRwrgT-IQJnDgY3CKkLIDR_Q9K7m3Q"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "342536922626-7tu8v4h3289cpp3feqpl68rtl08hiie1.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

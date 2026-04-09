@@ -1,0 +1,48 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isAuth() { return request.auth != null; }
+    
+    function isParticipant(chatId) {
+      return request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participantIds;
+    }
+
+    match /users/{userId} {
+      allow read: if isAuth();
+      // Allow creation of own profile, but restrict updates to non-system fields
+      allow create: if isAuth() && request.auth.uid == userId;
+      allow update: if isAuth() && request.auth.uid == userId
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['uid', 'email']);
+    }
+
+    match /chats/{chatId} {
+      allow read: if isAuth() && (request.auth.uid in resource.data.participantIds);
+      allow create: if isAuth() && (request.auth.uid in request.resource.data.participantIds)
+                    && request.resource.data.participantIds.size() <= 10;
+      allow update: if isAuth() && (request.auth.uid in resource.data.participantIds);
+      
+      match /messages/{messageId} {
+        allow read: if isAuth() && isParticipant(chatId);
+        
+        allow create: if isAuth() && isParticipant(chatId)
+                      && request.resource.data.senderId == request.auth.uid
+                      && request.resource.data.text.size() < 5000;
+                      
+        // Sender can edit their own message text/status/editedAt
+        // Any participant can update readBy, deliveredTo, status (for receipts) or reactions
+        allow update: if isAuth() && isParticipant(chatId)
+                      && (
+                        // Sender editing their own message
+                        (resource.data.senderId == request.auth.uid
+                          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'status', 'editedAt']))
+                        // Any participant can update read/delivery receipts
+                        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy', 'status'])
+                        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deliveredTo', 'status'])
+                        // Any participant can toggle reactions
+                        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+                      );
+      }
+    }
+  }
+}
