@@ -88,13 +88,26 @@ export const onChatMessageCreated = onDocumentCreated("chats/{chatId}/messages/{
       const senderData = senderSnap.data();
       const senderName = newMessage.senderType === 'ai' ? 'Kochanet AI' : (senderData?.displayName || 'A teammate');
 
+      const rtdb = admin.database();
+
       for (const recipientId of recipientIds) {
         const recipientRef = db.collection("users").doc(recipientId);
         const recipientSnap = await recipientRef.get();
         const recipientData = recipientSnap.data();
 
-        // Only send if recipient is offline (or hasn't seen it recently) and has a token
-        if (recipientData?.pushToken && !recipientData?.isOnline) {
+        // Prefer RTDB presence (same source as the app). Firestore isOnline can stay stale if
+        // profile sync ever wrote over the Cloud Function mirror.
+        let recipientLooksOffline = true;
+        try {
+          const statusSnap = await rtdb.ref(`status/${recipientId}`).once("value");
+          const presence = statusSnap.val();
+          recipientLooksOffline = presence?.state !== "online";
+        } catch (rtdbErr) {
+          console.warn(`[Push] RTDB presence read failed for ${recipientId}, using Firestore isOnline`, rtdbErr);
+          recipientLooksOffline = !recipientData?.isOnline;
+        }
+
+        if (recipientData?.pushToken && recipientLooksOffline) {
           const title = chatData.isGroup ? `New in ${chatData.name}` : senderName;
           const body = chatData.isGroup ? `${senderName} @ ${chatData.name}: ${newMessage.text}` : newMessage.text;
           const newBadgeCount = (recipientData.totalUnreadCount || 0) + 1;

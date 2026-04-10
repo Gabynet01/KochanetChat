@@ -7,7 +7,7 @@ import {
   signInWithEmailAndPassword,
   signOut
 } from 'firebase/auth';
-import { doc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { User } from '../types';
 import { auth, db } from './firebase';
 
@@ -79,10 +79,17 @@ export const authService = {
   syncUserProfile: async (user: User): Promise<void> => {
     try {
       const userRef = doc(db, 'users', user.uid);
-      await setDoc(userRef, {
-        ...user,
-        lastSeen: serverTimestamp(),
-      }, { merge: true });
+      // isOnline is owned by RTDB → onUserStatusChanged (Cloud Function). Writing true here
+      // on every foreground overwrote offline state and blocked push for that recipient.
+      const { isOnline: _ignored, ...profile } = user;
+      await setDoc(
+        userRef,
+        {
+          ...profile,
+          lastSeen: serverTimestamp(),
+        },
+        { merge: true },
+      );
     } catch (error) {
       console.error("syncUserProfile error:", error);
     }
@@ -94,7 +101,7 @@ export const authService = {
   updatePushToken: async (uid: string, token: string): Promise<void> => {
     try {
       const userRef = doc(db, 'users', uid);
-      await updateDoc(userRef, { pushToken: token });
+      await setDoc(userRef, { pushToken: token }, { merge: true });
       console.log(`Push token updated for user ${uid}`);
     } catch (error) {
       console.error("Failed to update push token:", error);

@@ -19,18 +19,19 @@ import React, {
 } from "react";
 import {
   ActivityIndicator,
-  Platform,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   StyleSheet,
   TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import {
-  KeyboardAvoidingView,
   KeyboardGestureArea,
+  KeyboardStickyView,
 } from "react-native-keyboard-controller";
 import Animated, { FadeInLeft } from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { ChatInput } from "./ChatInput";
 import { MessageBubble, TypingIndicator } from "./MessageBubble";
 
@@ -73,16 +74,30 @@ export default function ChatRoomScreen() {
   const [searchQuery, setSearchQuery] = useState("");
 
   const router = useRouter();
-  const insets = useSafeAreaInsets();
-  const PAGE_SIZE = 25;
+  /** Larger window so recent + partner messages usually load without relying on scroll pagination */
+  const PAGE_SIZE = 50;
 
   const isInitialMount = useRef(true);
+  /** >0 after fetchMore loaded older messages; snapshot must not overwrite lastDoc then */
+  const paginationBatchesRef = useRef(0);
+  /** One-shot older-history prefetch per chat (avoid tying to messages.length — optimistic sends retriggered the old effect) */
+  const didPrefetchOlderRef = useRef(false);
   const processedReadIds = useRef(new Set<string>());
   const processedDeliveredIds = useRef(new Set<string>());
 
   // 1. Subscribe to messages & Typing status
   useEffect(() => {
     if (!chatId) return;
+
+    isInitialMount.current = true;
+    paginationBatchesRef.current = 0;
+    didPrefetchOlderRef.current = false;
+    setMessages([]);
+    setLastDoc(null);
+    setHasMore(true);
+    setIsInitialLoading(true);
+    processedReadIds.current.clear();
+    processedDeliveredIds.current.clear();
 
     const unsubscribeMessages = chatService.subscribeToMessages(
       chatId,
@@ -116,8 +131,13 @@ export default function ChatRoomScreen() {
 
         setIsInitialLoading(false);
         if (isInitialMount.current) {
-          setLastDoc(cursor);
+          setLastDoc(cursor ?? null);
+          // Full first page => there may be older messages; short page => we already have them all
+          setHasMore(newMessages.length >= PAGE_SIZE);
           isInitialMount.current = false;
+        } else if (paginationBatchesRef.current === 0 && cursor) {
+          // Live window only: keep cursor in sync (e.g. first snapshot was empty, then a message arrives)
+          setLastDoc(cursor);
         }
       },
       PAGE_SIZE,
@@ -137,43 +157,51 @@ export default function ChatRoomScreen() {
   useEffect(() => {
     if (!chatId || !currentUser) return;
 
-    // First fetch the chat to find the partner
+    const myUid = currentUser.uid;
+    let cancelled = false;
     let unsubscribePresence: (() => void) | undefined;
 
     const initPartner = async () => {
-      const chats = await chatService.fetchChats(currentUser.uid);
-      const currentChat = chats.find((c) => c.id === chatId);
+      const chats = await chatService.fetchChats(myUid);
+      if (cancelled) return;
+      let currentChat = chats.find((c) => c.id === chatId);
+      if (!currentChat) {
+        currentChat = (await chatService.fetchChatById(chatId)) ?? undefined;
+      }
+      if (cancelled) return;
       if (currentChat) {
         const partnerId = currentChat.participantIds.find(
-          (uid) => uid !== currentUser.uid,
+          (uid) => uid !== myUid,
         );
         if (partnerId) {
-          // Load Profile
-          chatService.fetchUserById(partnerId).then(setPartnerUser);
+          chatService.fetchUserById(partnerId).then((u) => {
+            if (!cancelled && u) setPartnerUser(u);
+          });
 
-          // Subscribe to Presence
           unsubscribePresence = presenceService.subscribeToUserStatus(
             partnerId,
             (status) => {
-              setPartnerStatus(status);
+              if (!cancelled) setPartnerStatus(status);
             },
           );
         }
       }
     };
 
-    initPartner();
+    void initPartner();
 
     return () => {
-      if (unsubscribePresence) unsubscribePresence();
+      cancelled = true;
+      unsubscribePresence?.();
     };
   }, [chatId, currentUser]);
 
   // 1c. Filtered Messages for Search
   const filteredMessages = useMemo(() => {
     if (!searchQuery.trim()) return messages;
+    const q = searchQuery.toLowerCase();
     return messages.filter((m) =>
-      m.text.toLowerCase().includes(searchQuery.toLowerCase()),
+      (m.text ?? "").toLowerCase().includes(q),
     );
   }, [messages, searchQuery]);
 
@@ -226,11 +254,12 @@ export default function ChatRoomScreen() {
         PAGE_SIZE,
       );
 
-      if (result.messages.length < PAGE_SIZE) {
+      if (result.messages.length === 0 || result.messages.length < PAGE_SIZE) {
         setHasMore(false);
       }
 
       if (result.messages.length > 0) {
+        paginationBatchesRef.current += 1;
         setMessages((prev) => {
           const combined = [...prev, ...result.messages];
           // Filter duplicates just in case
@@ -243,10 +272,42 @@ export default function ChatRoomScreen() {
       }
     } catch (error) {
       console.error("Failed to load more messages:", error);
+      setHasMore(false);
     } finally {
       setIsLoadingMore(false);
     }
   }, [chatId, lastDoc, isLoadingMore, hasMore]);
+
+  const handleLoadMoreRef = useRef(handleLoadMore);
+  handleLoadMoreRef.current = handleLoadMore;
+
+  // Prefetch a few older pages once per chat open if the live window is full.
+  // Not keyed on messages.length — that re-fired on every optimistic send when count crossed PAGE_SIZE.
+  useEffect(() => {
+    if (!chatId || isInitialLoading) return;
+    if (didPrefetchOlderRef.current) return;
+    if (!hasMore || lastDoc == null) {
+      didPrefetchOlderRef.current = true;
+      return;
+    }
+    if (messages.length < PAGE_SIZE) {
+      didPrefetchOlderRef.current = true;
+      return;
+    }
+
+    didPrefetchOlderRef.current = true;
+    let cancelled = false;
+    const chain = async () => {
+      for (let i = 0; i < 4 && !cancelled; i++) {
+        await handleLoadMoreRef.current();
+        await new Promise((r) => setTimeout(r, 120));
+      }
+    };
+    void chain();
+    return () => {
+      cancelled = true;
+    };
+  }, [chatId, isInitialLoading, hasMore, lastDoc, messages.length]);
 
   // 2. Handle sending messages
   const handleSend = async (
@@ -404,14 +465,19 @@ export default function ChatRoomScreen() {
     [chatId, currentUser],
   );
 
-  // 4. Auto-Pagination on Scroll
-  const handleScroll = (event: any) => {
-    const { contentOffset } = event.nativeEvent;
+  // 4. Auto-Pagination on Scroll (near top = older messages)
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, layoutMeasurement, contentSize } =
+      event.nativeEvent;
+    const hasScrollableOverflow =
+      contentSize.height > layoutMeasurement.height + 32;
     if (
       contentOffset.y < 100 &&
+      hasScrollableOverflow &&
       hasMore &&
       !isLoadingMore &&
-      !isInitialMount.current
+      !isInitialMount.current &&
+      lastDoc != null
     ) {
       handleLoadMore();
     }
@@ -510,19 +576,14 @@ export default function ChatRoomScreen() {
         }}
       />
       <Screen safeArea={false}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          style={{ flex: 1 }}
-          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 56 : 100}
+        <View
+          style={[
+            styles.container,
+            {
+              backgroundColor: colors.bgPrimary,
+            },
+          ]}
         >
-          <View
-            style={[
-              styles.container,
-              {
-                backgroundColor: colors.bgPrimary,
-              },
-            ]}
-          >
             {isInitialLoading && (
               <View style={StyleSheet.absoluteFill}>
                 <ActivityIndicator
@@ -568,105 +629,113 @@ export default function ChatRoomScreen() {
                 ListHeaderComponent={() => (
                   <View style={styles.loaderContainer}>
                     {hasMore ? (
-                      isLoadingMore && (
+                      isLoadingMore ? (
                         <ActivityIndicator
                           size="small"
                           color={colors.accentBrand}
                         />
-                      )
-                    ) : (
+                      ) : null
+                    ) : messages.length > 0 ? (
                       <Typography
                         variant="caption"
                         color={colors.textSecondary}
                         style={{ textAlign: "center" }}
                       >
-                        No more messages
+                        Start of conversation
                       </Typography>
-                    )}
+                    ) : null}
                   </View>
                 )}
               />
             </KeyboardGestureArea>
 
-            {/* Reply Preview */}
-            {replyMessage && (
-              <View
-                style={[
-                  styles.replyPreview,
-                  { backgroundColor: colors.bgSecondary },
-                ]}
+            <KeyboardStickyView
+              style={{ backgroundColor: colors.bgPrimary }}
+            >
+              <SafeAreaView
+                edges={["bottom"]}
+                style={{ backgroundColor: colors.bgPrimary }}
               >
-                <View
-                  style={[
-                    styles.replySide,
-                    {
-                      backgroundColor:
-                        replyMessage.senderType === "ai"
-                          ? colors.accentAI
-                          : colors.accentBrand,
-                    },
-                  ]}
+                {/* Reply Preview */}
+                {replyMessage && (
+                  <View
+                    style={[
+                      styles.replyPreview,
+                      { backgroundColor: colors.bgSecondary },
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.replySide,
+                        {
+                          backgroundColor:
+                            replyMessage.senderType === "ai"
+                              ? colors.accentAI
+                              : colors.accentBrand,
+                        },
+                      ]}
+                    />
+                    <View style={styles.replyContent}>
+                      <Typography
+                        variant="caption"
+                        color={
+                          replyMessage.senderType === "ai"
+                            ? colors.accentAI
+                            : colors.accentBrand
+                        }
+                        style={{ fontWeight: "700" }}
+                      >
+                        Replying to{" "}
+                        {replyMessage.senderType === "ai"
+                          ? "Kochanet AI"
+                          : replyMessage.senderId === currentUser?.uid
+                            ? "You"
+                            : "Member"}
+                      </Typography>
+                      <Typography
+                        variant="body"
+                        numberOfLines={1}
+                        style={{ opacity: 0.8, fontSize: 13 }}
+                      >
+                        {replyMessage.text}
+                      </Typography>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => setReplyMessage(null)}
+                      style={styles.closeReplyBtn}
+                    >
+                      <X size={16} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {typingUsers.length > 0 && (
+                  <Animated.View
+                    entering={FadeInLeft.springify()}
+                    style={styles.typingIndicatorRow}
+                  >
+                    <View
+                      style={[
+                        styles.typingBubble,
+                        { backgroundColor: colors.bgSecondary },
+                      ]}
+                    >
+                      <TypingIndicator />
+                    </View>
+                  </Animated.View>
+                )}
+
+                <ChatInput
+                  chatId={chatId}
+                  onSend={handleSend}
+                  updateMessageStatus={updateMessageStatus}
+                  editingMessage={editingMessage}
+                  onCancelEdit={() => setEditingMessage(null)}
+                  onSaveEdit={handleSaveEdit}
                 />
-                <View style={styles.replyContent}>
-                  <Typography
-                    variant="caption"
-                    color={
-                      replyMessage.senderType === "ai"
-                        ? colors.accentAI
-                        : colors.accentBrand
-                    }
-                    style={{ fontWeight: "700" }}
-                  >
-                    Replying to{" "}
-                    {replyMessage.senderType === "ai"
-                      ? "Kochanet AI"
-                      : replyMessage.senderId === currentUser?.uid
-                        ? "You"
-                        : "Member"}
-                  </Typography>
-                  <Typography
-                    variant="body"
-                    numberOfLines={1}
-                    style={{ opacity: 0.8, fontSize: 13 }}
-                  >
-                    {replyMessage.text}
-                  </Typography>
-                </View>
-                <TouchableOpacity
-                  onPress={() => setReplyMessage(null)}
-                  style={styles.closeReplyBtn}
-                >
-                  <X size={16} color={colors.textSecondary} />
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {typingUsers.length > 0 && (
-              <Animated.View
-                entering={FadeInLeft.springify()}
-                style={styles.typingIndicatorRow}
-              >
-                <View
-                  style={[
-                    styles.typingBubble,
-                    { backgroundColor: colors.bgSecondary },
-                  ]}
-                >
-                  <TypingIndicator />
-                </View>
-              </Animated.View>
-            )}
-
-            <ChatInput
-              chatId={chatId}
-              onSend={handleSend}
-              updateMessageStatus={updateMessageStatus}
-              editingMessage={editingMessage}
-              onCancelEdit={() => setEditingMessage(null)}
-              onSaveEdit={handleSaveEdit}
-            />
-          </View>
-        </KeyboardAvoidingView>
+              </SafeAreaView>
+            </KeyboardStickyView>
+        </View>
       </Screen>
     </>
   );

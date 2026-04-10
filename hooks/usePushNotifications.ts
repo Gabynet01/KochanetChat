@@ -17,8 +17,6 @@ Notifications.setNotificationHandler({
   }),
 });
 
-
-
 export async function registerForPushNotificationsAsync() {
   let token;
 
@@ -32,7 +30,8 @@ export async function registerForPushNotificationsAsync() {
   }
 
   if (Device.isDevice) {
-    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    const { status: existingStatus } =
+      await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
     if (existingStatus !== "granted") {
       const { status } = await Notifications.requestPermissionsAsync();
@@ -44,12 +43,13 @@ export async function registerForPushNotificationsAsync() {
     }
 
     // Gets the Expo Push Token
-    const projectId = Constants.easConfig?.projectId ?? "411729e4-2c08-4554-85b9-830785989d44";
+    const projectId =
+      Constants.easConfig?.projectId ?? "411729e4-2c08-4554-85b9-830785989d44";
 
     token = await Notifications.getExpoPushTokenAsync({
       projectId,
     });
-    
+
     console.log("Expo Push Token successfully retrieved:", token.data);
   } else {
     console.log("Push notifications skipped: Not a physical device");
@@ -65,15 +65,17 @@ export async function registerForPushNotificationsAsync() {
 export function usePushNotifications() {
   useEffect(() => {
     // Listener for when a notification is received while the app is foregrounded
-    const subscription = Notifications.addNotificationReceivedListener((notification) => {
-      const { title, body } = notification.request.content;
-      
-      // Use the global error/info toast to show the notification in-app
-      const message = title ? `${title}: ${body}` : body;
-      if (message) {
-        useErrorStore.getState().setError(message, "info");
-      }
-    });
+    const subscription = Notifications.addNotificationReceivedListener(
+      (notification) => {
+        const { title, body } = notification.request.content;
+
+        // Use the global error/info toast to show the notification in-app
+        const message = title ? `${title}: ${body}` : body;
+        if (message) {
+          useErrorStore.getState().setError(message, "info");
+        }
+      },
+    );
 
     // Cleanup subscription on unmount
     return () => {

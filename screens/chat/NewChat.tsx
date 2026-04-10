@@ -22,8 +22,9 @@ const NewChat = () => {
 
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setIsModalVisible(false);
-    const newChat = await chatService.createChat(
-      [user.uid, targetUser.uid],
+    const newChat = await chatService.getOrCreateDirectChat(
+      user.uid,
+      targetUser.uid,
       targetUser.displayName,
     );
     if (newChat) {

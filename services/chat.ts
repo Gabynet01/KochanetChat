@@ -34,6 +34,47 @@ const tsToNum = (ts: any): number => {
   return Date.now();
 };
 
+function hasConversationPreview(c: Chat): boolean {
+  return Boolean(c.lastMessageText && String(c.lastMessageText).trim().length > 0);
+}
+
+/**
+ * When duplicate 1:1 threads exist, prefer the doc that actually has chat history
+ * (lastMessageText set). A brand-new empty duplicate often has a newer lastUpdated
+ * but an empty messages subcollection — that made the inbox open the wrong thread.
+ */
+function pickBetterDirectChat(a: Chat, b: Chat): Chat {
+  const aPrev = hasConversationPreview(a);
+  const bPrev = hasConversationPreview(b);
+  if (aPrev !== bPrev) {
+    return aPrev ? a : b;
+  }
+  return a.lastUpdated >= b.lastUpdated ? a : b;
+}
+
+/** One row per 1:1 partner: keep the best duplicate (real thread, not empty clone). */
+function dedupeDirectMessageThreads(chats: Chat[]): Chat[] {
+  const byPair = new Map<string, Chat>();
+  const nonDirect: Chat[] = [];
+  for (const c of chats) {
+    const ids = c.participantIds;
+    if (ids?.length === 2) {
+      const key = [...ids].sort().join("|");
+      const prev = byPair.get(key);
+      if (!prev) {
+        byPair.set(key, c);
+      } else {
+        byPair.set(key, pickBetterDirectChat(prev, c));
+      }
+    } else {
+      nonDirect.push(c);
+    }
+  }
+  return [...byPair.values(), ...nonDirect].sort(
+    (a, b) => b.lastUpdated - a.lastUpdated,
+  );
+}
+
 /**
  * Enhanced Chat Service
  * Integrated with Firestore for real-time sync and persistence.
@@ -45,11 +86,12 @@ export const chatService = {
       const q = query(chatsRef, where('participantIds', 'array-contains', userId), orderBy('lastUpdated', 'desc'));
       const snapshot = await getDocs(q);
       
-      return snapshot.docs.map(doc => ({
+      const list = snapshot.docs.map(doc => ({
         ...doc.data(),
         id: doc.id,
         lastUpdated: tsToNum(doc.data().lastUpdated)
       })) as Chat[];
+      return dedupeDirectMessageThreads(list);
     } catch (error) {
       console.error("fetchChats error:", error);
       useErrorStore.getState().setError("Failed to load chats.");
@@ -65,14 +107,22 @@ export const chatService = {
     const chatsRef = collection(db, 'chats');
     const q = query(chatsRef, where('participantIds', 'array-contains', userId), orderBy('lastUpdated', 'desc'));
 
-    return onSnapshot(q, (snapshot) => {
-      const chats = snapshot.docs.map(d => ({
-        ...d.data(),
-        id: d.id,
-        lastUpdated: tsToNum(d.data().lastUpdated)
-      })) as Chat[];
-      callback(chats);
-    });
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const chats = snapshot.docs.map(d => ({
+          ...d.data(),
+          id: d.id,
+          lastUpdated: tsToNum(d.data().lastUpdated)
+        })) as Chat[];
+        callback(dedupeDirectMessageThreads(chats));
+      },
+      (err) => {
+        console.error("subscribeToChats error:", err);
+        useErrorStore.getState().setError("Could not sync inbox. Check Firestore indexes and network.");
+        callback([]);
+      },
+    );
   },
 
   fetchChatById: async (chatId: string): Promise<Chat | null> => {
@@ -151,6 +201,58 @@ export const chatService = {
     }
   },
 
+  /**
+   * Finds an existing 1:1 chat between two users (same participantIds), if any.
+   */
+  findDirectChat: async (myUid: string, otherUid: string): Promise<Chat | null> => {
+    try {
+      const chatsRef = collection(db, 'chats');
+      const q = query(
+        chatsRef,
+        where('participantIds', 'array-contains', myUid),
+        orderBy('lastUpdated', 'desc'),
+      );
+      const snapshot = await getDocs(q);
+      const matches: Chat[] = [];
+      for (const d of snapshot.docs) {
+        const data = d.data();
+        const ids = data.participantIds as string[] | undefined;
+        if (
+          ids?.length === 2 &&
+          ids.includes(myUid) &&
+          ids.includes(otherUid)
+        ) {
+          matches.push({
+            ...data,
+            id: d.id,
+            lastUpdated: tsToNum(data.lastUpdated),
+          } as Chat);
+        }
+      }
+      if (matches.length === 0) return null;
+      return matches.reduce((best, c) => pickBetterDirectChat(best, c));
+    } catch (error) {
+      console.error('findDirectChat error:', error);
+      return null;
+    }
+  },
+
+  /**
+   * Opens the existing DM with this user or creates one — avoids duplicate Firestore chats.
+   */
+  getOrCreateDirectChat: async (
+    myUid: string,
+    otherUid: string,
+    otherDisplayName?: string,
+  ): Promise<Chat | null> => {
+    const existing = await chatService.findDirectChat(myUid, otherUid);
+    if (existing) return existing;
+    return chatService.createChat(
+      [myUid, otherUid],
+      otherDisplayName,
+    );
+  },
+
   subscribeToMessages: (
     chatId: string, 
     callback: (msgs: Message[], lastDoc: any) => void,
@@ -160,30 +262,38 @@ export const chatService = {
     // Listen to latest messages
     const q = query(messagesRef, orderBy('createdAt', 'desc'), limit(pageSize));
 
-    return onSnapshot(q, (snapshot) => {
-      const messages = snapshot.docs.map(d => {
-        const data = d.data();
-        return {
-          ...data,
-          id: d.id,
-          createdAt: tsToNum(data.createdAt),
-        } as Message;
-      });
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const messages = snapshot.docs.map(d => {
+          const data = d.data();
+          return {
+            ...data,
+            id: d.id,
+            createdAt: tsToNum(data.createdAt),
+          } as Message;
+        });
 
-      // Hydrate replyTo previews from replyToId
-      const hydratedMessages = messages.map(msg => {
-        if (msg.replyToId && !msg.replyTo) {
-          const parent = messages.find(m => m.id === msg.replyToId);
-          if (parent) {
-            return { ...msg, replyTo: { id: parent.id, text: parent.text, senderId: parent.senderId, senderType: parent.senderType } as Message };
+        // Hydrate replyTo previews from replyToId
+        const hydratedMessages = messages.map(msg => {
+          if (msg.replyToId && !msg.replyTo) {
+            const parent = messages.find(m => m.id === msg.replyToId);
+            if (parent) {
+              return { ...msg, replyTo: { id: parent.id, text: parent.text, senderId: parent.senderId, senderType: parent.senderType } as Message };
+            }
           }
-        }
-        return msg;
-      });
+          return msg;
+        });
 
-      const lastDoc = snapshot.docs[snapshot.docs.length - 1];
-      callback(hydratedMessages, lastDoc);
-    });
+        const lastDoc = snapshot.docs[snapshot.docs.length - 1];
+        callback(hydratedMessages, lastDoc);
+      },
+      (err) => {
+        console.error("subscribeToMessages error:", err);
+        useErrorStore.getState().setError("Could not load messages. Check network and Firestore rules.");
+        callback([], undefined);
+      },
+    );
   },
 
   fetchMoreMessages: async (
@@ -451,11 +561,18 @@ export const chatService = {
     const q = query(chatsRef, where('participantIds', 'array-contains', userId));
 
     return onSnapshot(q, (snapshot) => {
-      let total = 0;
-      snapshot.docs.forEach(doc => {
-        const data = doc.data() as Chat;
-        total += data.unreadCounts?.[userId] || 0;
+      const unreadByKey = new Map<string, number>();
+      snapshot.docs.forEach((docSnap) => {
+        const data = docSnap.data() as Chat;
+        const ids = data.participantIds;
+        const key =
+          ids?.length === 2
+            ? [...ids].sort().join("|")
+            : `chat:${docSnap.id}`;
+        const n = data.unreadCounts?.[userId] || 0;
+        unreadByKey.set(key, (unreadByKey.get(key) || 0) + n);
       });
+      const total = [...unreadByKey.values()].reduce((a, b) => a + b, 0);
       callback(total);
     });
   }

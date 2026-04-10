@@ -18,13 +18,11 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
-  Platform,
   StyleSheet,
   TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AudioWaveform } from "./AudioWaveform";
 
 interface ChatInputProps {
@@ -63,7 +61,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const [isTranscribing, setIsTranscribing] = useState(false);
 
   const debouncedText = useDebounce(text, 1500);
-  const insets = useSafeAreaInsets();
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 100);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -286,7 +283,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         styles.container,
         {
           backgroundColor: colors.bgPrimary,
-          paddingBottom: Platform.OS === "ios" ? insets.bottom : 12,
           borderTopColor: colors.borderColor,
         },
       ]}

@@ -11,6 +11,17 @@ import { connectStorageEmulator, getStorage } from 'firebase/storage';
 import { Platform } from 'react-native';
 import { firebaseConfig } from './firebaseConfig';
 
+/** Must match the region where Cloud Functions are deployed (see `firebase deploy` logs). */
+const CLOUD_FUNCTIONS_REGION = 'us-central1';
+
+/** When unset/false, dev builds use production Firebase (deployed project). Set to "true" only while emulators are running. */
+function shouldUseFirebaseEmulators(): boolean {
+  return (
+    __DEV__ &&
+    process.env.EXPO_PUBLIC_USE_FIREBASE_EMULATORS === 'true'
+  );
+}
+
 /**
  * Host machine as seen from the running app.
  * Metro may use 127.0.0.1 (adb reverse); Firebase emulators on the host must still use
@@ -44,12 +55,12 @@ if (getApps().length === 0) {
 
   // 3. Initialize Services
   db = getFirestore(app);
-  functions = getFunctions(app);
+  functions = getFunctions(app, CLOUD_FUNCTIONS_REGION);
   storage = getStorage(app);
   rtdb = getDatabase(app);
 
-  // 4. Connect Emulators (Only runs ONCE)
-  if (__DEV__) {
+  // 4. Emulators only when explicitly enabled (see EXPO_PUBLIC_USE_FIREBASE_EMULATORS)
+  if (shouldUseFirebaseEmulators()) {
     const host = getEmulatorHost();
 
     connectAuthEmulator(auth, `http://${host}:9099`, { disableWarnings: true });
@@ -59,13 +70,17 @@ if (getApps().length === 0) {
     connectDatabaseEmulator(rtdb, host, 9000);
 
     console.log(`🔥 [Firebase] Connected to local emulators at ${host}`);
+  } else if (__DEV__) {
+    console.log(
+      '🔥 [Firebase] Using production backend (dev). Set EXPO_PUBLIC_USE_FIREBASE_EMULATORS=true when running firebase emulators.',
+    );
   }
 } else {
   // 5. App already exists during Fast Refresh, just grab the existing instances
   app = getApp();
   auth = getAuth(app);
   db = getFirestore(app);
-  functions = getFunctions(app);
+  functions = getFunctions(app, CLOUD_FUNCTIONS_REGION);
   storage = getStorage(app);
   rtdb = getDatabase(app);
 }

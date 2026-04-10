@@ -57,10 +57,11 @@ export default function InboxScreen() {
 
   // Filter chats based on search query
   const filteredChats = useMemo(() => {
+    const q = search.toLowerCase();
     return chats.filter(
       (c) =>
-        c.name.toLowerCase().includes(search.toLowerCase()) ||
-        c.lastMessageText?.toLowerCase().includes(search.toLowerCase()),
+        (c.name ?? "").toLowerCase().includes(q) ||
+        (c.lastMessageText ?? "").toLowerCase().includes(q),
     );
   }, [chats, search]);
 
