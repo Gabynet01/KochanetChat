@@ -31,7 +31,10 @@ import {
   KeyboardStickyView,
 } from "react-native-keyboard-controller";
 import Animated, { FadeInLeft } from "react-native-reanimated";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import { ChatInput } from "./ChatInput";
 import { MessageBubble, TypingIndicator } from "./MessageBubble";
 
@@ -74,6 +77,9 @@ export default function ChatRoomScreen() {
   const [searchQuery, setSearchQuery] = useState("");
 
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  /** Space for absolute composer (multiline input + reply strip + typing + home/nav bar). */
+  const listBottomPad = insets.bottom + 220;
   /** Larger window so recent + partner messages usually load without relying on scroll pagination */
   const PAGE_SIZE = 50;
 
@@ -584,157 +590,163 @@ export default function ChatRoomScreen() {
             },
           ]}
         >
-            {isInitialLoading && (
-              <View style={StyleSheet.absoluteFill}>
-                <ActivityIndicator
-                  size="large"
-                  color={colors.accentBrand}
-                  style={{ marginTop: 100 }}
-                />
-              </View>
-            )}
-
-            {/* Subtle Decorative Aura */}
-            <View
-              style={[
-                styles.aura,
-                { backgroundColor: colors.accentAI, opacity: 0.03 },
-              ]}
-              pointerEvents="none"
-            />
-
-            <KeyboardGestureArea style={{ flex: 1 }}>
-              <FlashList
-                data={filteredMessages}
-                keyExtractor={(item) => item.id}
-                onScroll={handleScroll}
-                scrollEventThrottle={16}
-                renderItem={({ item }) => (
-                  <MessageBubble
-                    message={item}
-                    searchQuery={searchQuery}
-                    onSwipetoReply={setReplyMessage}
-                    onEditRequest={setEditingMessage}
-                    onRetry={handleRetry}
-                    onAddReaction={(msg, emoji) =>
-                      handleAddReaction(msg, emoji)
-                    }
-                  />
-                )}
-                maintainVisibleContentPosition={{
-                  autoscrollToBottomThreshold: 10,
-                  startRenderingFromBottom: true,
-                }}
-                contentContainerStyle={styles.listContent}
-                ListHeaderComponent={() => (
-                  <View style={styles.loaderContainer}>
-                    {hasMore ? (
-                      isLoadingMore ? (
-                        <ActivityIndicator
-                          size="small"
-                          color={colors.accentBrand}
-                        />
-                      ) : null
-                    ) : messages.length > 0 ? (
-                      <Typography
-                        variant="caption"
-                        color={colors.textSecondary}
-                        style={{ textAlign: "center" }}
-                      >
-                        Start of conversation
-                      </Typography>
-                    ) : null}
-                  </View>
-                )}
+          {isInitialLoading && (
+            <View style={StyleSheet.absoluteFill}>
+              <ActivityIndicator
+                size="large"
+                color={colors.accentBrand}
+                style={{ marginTop: 100 }}
               />
-            </KeyboardGestureArea>
+            </View>
+          )}
 
-            <KeyboardStickyView
+          <View
+            style={[
+              styles.aura,
+              { backgroundColor: colors.accentAI, opacity: 0.03 },
+            ]}
+            pointerEvents="none"
+          />
+
+          <KeyboardGestureArea style={styles.container}>
+            <FlashList
+              data={filteredMessages}
+              keyExtractor={(item) => item.id}
+              onScroll={handleScroll}
+              scrollEventThrottle={16}
+              keyboardDismissMode="interactive"
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item }) => (
+                <MessageBubble
+                  message={item}
+                  searchQuery={searchQuery}
+                  onSwipetoReply={setReplyMessage}
+                  onEditRequest={setEditingMessage}
+                  onRetry={handleRetry}
+                  onAddReaction={(msg, emoji) =>
+                    handleAddReaction(msg, emoji)
+                  }
+                />
+              )}
+              maintainVisibleContentPosition={{
+                autoscrollToBottomThreshold: 10,
+                startRenderingFromBottom: true,
+              }}
+              contentContainerStyle={[
+                styles.listContent,
+                { paddingBottom: listBottomPad },
+              ]}
+              ListHeaderComponent={() => (
+                <View style={styles.loaderContainer}>
+                  {hasMore ? (
+                    isLoadingMore ? (
+                      <ActivityIndicator
+                        size="small"
+                        color={colors.accentBrand}
+                      />
+                    ) : null
+                  ) : messages.length > 0 ? (
+                    <Typography
+                      variant="caption"
+                      color={colors.textSecondary}
+                      style={{ textAlign: "center" }}
+                    >
+                      Start of conversation
+                    </Typography>
+                  ) : null}
+                </View>
+              )}
+            />
+          </KeyboardGestureArea>
+
+          <KeyboardStickyView
+            style={[
+              styles.composerDock,
+              { backgroundColor: colors.bgPrimary },
+            ]}
+          >
+            <SafeAreaView
+              edges={["bottom"]}
               style={{ backgroundColor: colors.bgPrimary }}
             >
-              <SafeAreaView
-                edges={["bottom"]}
-                style={{ backgroundColor: colors.bgPrimary }}
-              >
-                {/* Reply Preview */}
-                {replyMessage && (
+              {replyMessage && (
+                <View
+                  style={[
+                    styles.replyPreview,
+                    { backgroundColor: colors.bgSecondary },
+                  ]}
+                >
                   <View
                     style={[
-                      styles.replyPreview,
+                      styles.replySide,
+                      {
+                        backgroundColor:
+                          replyMessage.senderType === "ai"
+                            ? colors.accentAI
+                            : colors.accentBrand,
+                      },
+                    ]}
+                  />
+                  <View style={styles.replyContent}>
+                    <Typography
+                      variant="caption"
+                      color={
+                        replyMessage.senderType === "ai"
+                          ? colors.accentAI
+                          : colors.accentBrand
+                      }
+                      style={{ fontWeight: "700" }}
+                    >
+                      Replying to{" "}
+                      {replyMessage.senderType === "ai"
+                        ? "Kochanet AI"
+                        : replyMessage.senderId === currentUser?.uid
+                          ? "You"
+                          : "Member"}
+                    </Typography>
+                    <Typography
+                      variant="body"
+                      numberOfLines={1}
+                      style={{ opacity: 0.8, fontSize: 13 }}
+                    >
+                      {replyMessage.text}
+                    </Typography>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setReplyMessage(null)}
+                    style={styles.closeReplyBtn}
+                  >
+                    <X size={16} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {typingUsers.length > 0 && (
+                <Animated.View
+                  entering={FadeInLeft.springify()}
+                  style={styles.typingIndicatorRow}
+                >
+                  <View
+                    style={[
+                      styles.typingBubble,
                       { backgroundColor: colors.bgSecondary },
                     ]}
                   >
-                    <View
-                      style={[
-                        styles.replySide,
-                        {
-                          backgroundColor:
-                            replyMessage.senderType === "ai"
-                              ? colors.accentAI
-                              : colors.accentBrand,
-                        },
-                      ]}
-                    />
-                    <View style={styles.replyContent}>
-                      <Typography
-                        variant="caption"
-                        color={
-                          replyMessage.senderType === "ai"
-                            ? colors.accentAI
-                            : colors.accentBrand
-                        }
-                        style={{ fontWeight: "700" }}
-                      >
-                        Replying to{" "}
-                        {replyMessage.senderType === "ai"
-                          ? "Kochanet AI"
-                          : replyMessage.senderId === currentUser?.uid
-                            ? "You"
-                            : "Member"}
-                      </Typography>
-                      <Typography
-                        variant="body"
-                        numberOfLines={1}
-                        style={{ opacity: 0.8, fontSize: 13 }}
-                      >
-                        {replyMessage.text}
-                      </Typography>
-                    </View>
-                    <TouchableOpacity
-                      onPress={() => setReplyMessage(null)}
-                      style={styles.closeReplyBtn}
-                    >
-                      <X size={16} color={colors.textSecondary} />
-                    </TouchableOpacity>
+                    <TypingIndicator />
                   </View>
-                )}
+                </Animated.View>
+              )}
 
-                {typingUsers.length > 0 && (
-                  <Animated.View
-                    entering={FadeInLeft.springify()}
-                    style={styles.typingIndicatorRow}
-                  >
-                    <View
-                      style={[
-                        styles.typingBubble,
-                        { backgroundColor: colors.bgSecondary },
-                      ]}
-                    >
-                      <TypingIndicator />
-                    </View>
-                  </Animated.View>
-                )}
-
-                <ChatInput
-                  chatId={chatId}
-                  onSend={handleSend}
-                  updateMessageStatus={updateMessageStatus}
-                  editingMessage={editingMessage}
-                  onCancelEdit={() => setEditingMessage(null)}
-                  onSaveEdit={handleSaveEdit}
-                />
-              </SafeAreaView>
-            </KeyboardStickyView>
+              <ChatInput
+                chatId={chatId}
+                onSend={handleSend}
+                updateMessageStatus={updateMessageStatus}
+                editingMessage={editingMessage}
+                onCancelEdit={() => setEditingMessage(null)}
+                onSaveEdit={handleSaveEdit}
+              />
+            </SafeAreaView>
+          </KeyboardStickyView>
         </View>
       </Screen>
     </>
@@ -774,8 +786,14 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: 16,
-    paddingBottom: 20,
     paddingTop: 8,
+  },
+  composerDock: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 2,
   },
   replyPreview: {
     flexDirection: "row",

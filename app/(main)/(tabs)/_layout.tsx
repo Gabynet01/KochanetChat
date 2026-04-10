@@ -5,10 +5,18 @@ import { PlatformPressable } from "@react-navigation/elements";
 import * as Haptics from "expo-haptics";
 import { Tabs } from "expo-router";
 import { MessageSquare, User } from "lucide-react-native";
+import { Platform } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+const MIN_TAB_BAR_BOTTOM =
+  Platform.OS === "android" ? 24 : 12;
 
 export default function MainLayout() {
   const { colors } = useTheme();
   const totalUnreadCount = useChatStore((state) => state.totalUnreadCount);
+  const insets = useSafeAreaInsets();
+  /** Clear home indicator / Android nav bar (insets.bottom is sometimes 0 on older layouts). */
+  const tabBarBottomPad = Math.max(insets.bottom, MIN_TAB_BAR_BOTTOM);
 
   return (
     <Tabs
@@ -21,8 +29,9 @@ export default function MainLayout() {
           backgroundColor: colors.bgPrimary,
           borderTopWidth: 0,
           elevation: 0,
-          height: 80,
-          paddingBottom: 20,
+          paddingTop: 8,
+          paddingBottom: tabBarBottomPad,
+          height: 56 + tabBarBottomPad,
         },
         tabBarLabelStyle: {
           fontFamily: "Quicksand_700Bold",
